@@ -110,6 +110,7 @@ async function generatePunch(type) {
     const employeeCanSignerValidate = await getEmployeeUserCanSigner();
     if (employeeCanSignerValidate.status != 200) {
         console.error("User can't signer... ???", employeeCanSignerValidate);
+        return;
     }
     console.log("Employee can signer DONE");
     // Punch...
@@ -119,6 +120,7 @@ async function generatePunch(type) {
         console.error("Punch can't completed...", punch);
         return;
     }
+    console.log("Punch completed successfull", punch.data);
 }
 
 generatePunch(0);
