@@ -2,6 +2,8 @@ import CryptoJS from 'crypto-js';
 import axios from 'axios';
 import tough from 'tough-cookie';
 import { wrapper } from 'axios-cookiejar-support';
+import crc32 from 'crc-32';
+import moment from 'moment';
 
 const WORKERA_USER = ""
 const WORKERA_PASS = ""
@@ -16,7 +18,8 @@ const https_options = {
     headers: {
         // default shit.... prevent if they check on a feature
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Content-Type': 'text/plain'
+        'Content-Type': 'text/plain',
+        'Is_employee': 'true'
     }
 }
 
@@ -34,16 +37,49 @@ async function loginUser(authMessage) {
     return loginPost;
 }
 
-async function getEmployeeInfo() {
-    const employeeData = await client.get('https://workera.com/api-employee/employee-companias', https_options);
+async function getEmployerInfo() {
+    const employerData = await client.get('https://workera.com/api-employee/employee-companias', https_options);
+    return employerData.data;
+}
+
+async function getEmployeeInfo(employerNickname) {
+    const employeeData = await client.get(`https://workera.com/api-employee/logged-employee-parameters/${employerNickname}`, https_options);
     return employeeData.data;
 }
 
-async function generatePunch(type) {
-    // type can in/out~
+async function getEmployeeUserCanSigner() {
+    const employeeUserCanSigner = await client.get('https://workera.com/api-employee/gd/employee-user-can-signer', https_options);
+    return employeeUserCanSigner;
 }
 
-async function generatePunch() {
+async function getDataPortal(employeeUserId) {
+    https_options.headers['userEmployee'] = employeeUserId;
+    const dataPortal = await client.get('https://workera.com/api-employee/cdata-portal', https_options);
+    return dataPortal.data;
+}
+
+function calcCheksum(employeeId, dateStr) {
+    const strCrc = `${employeeId}${dateStr}`;
+    return crc32.str(strCrc) >>> 0;
+}
+
+async function sendPunch(employeeId, dataPortal, type) {
+    // type can in/out~
+    const punchDate = moment(dataPortal['localTime'], 'YYYY/MM/DD HH:mm:ss');
+    const checksum = calcCheksum('undefined', punchDate.format('YYYYMMDDHHmmss')); // yes, empoyeeID is undefined... workera bugs!~
+    const punchData = {
+        "dateTime": `${dataPortal['localTime']}`,
+        "type": type,
+        "checksum": checksum
+    }
+    const punchGenerateRequest = await client.post('https://workera.com/api-employee/cdata-portal', punchData, https_options);
+    return punchGenerateRequest
+}
+
+// -----------
+// Type: 0: entrada
+//       1: salida
+async function generatePunch(type) {
     const encryptKey = await getEncryptKey();
     let encryptLoginMessage = encryptAES(
         `{"username":"${WORKERA_USER}","password":"${WORKERA_PASS}"}`, 
@@ -52,18 +88,37 @@ async function generatePunch() {
     encryptLoginMessage = `${encryptKey}${encryptLoginMessage}`;
     const loginPost = await loginUser(encryptLoginMessage);
     if (loginPost.status != 200) {
-        console.error("Can't login! check the details...?");
-        exit;
+        console.error("Can't login! check the details...?", loginPost);
+        return;
     }
     console.log("Login success");
     // Valid login success and cookie is saved....
-    const employeeData = await getEmployeeInfo();
-    if (!Array.isArray(employeeData)) {
-        console.error("Can't get the employee information... some error ocurre... cookies?");
-        exit;
+    const employerData = await getEmployerInfo();
+    if (!Array.isArray(employerData)) {
+        console.error("Can't get the employer information... some error ocurre... cookies?");
+        return;
     }
-    console.log("Employee data info success", employeeData);
-    /// ----------> generate punch
+    console.log("Employer data success", employerData[0]['nickname']);
+    const employeeData = await getEmployeeInfo(employerData[0]["nickname"]);
+    if (!("company" in employeeData) || !("employeeId" in employeeData['company'])) {
+        console.error("The employee information not found...");
+        return;
+    }
+    const employeeUserId = employeeData['userEmployeeId'];
+    const employeeId = employeeData['company']['employeeId'];
+    console.log("Employee data info success", employeeId);
+    const employeeCanSignerValidate = await getEmployeeUserCanSigner();
+    if (employeeCanSignerValidate.status != 200) {
+        console.error("User can't signer... ???", employeeCanSignerValidate);
+    }
+    console.log("Employee can signer DONE");
+    // Punch...
+    const dataPortal = await getDataPortal(employeeUserId);
+    const punch = await sendPunch(employeeId, dataPortal, type);
+    if (punch.status != 200) {
+        console.error("Punch can't completed...", punch);
+        return;
+    }
 }
 
-generatePunch();
+generatePunch(0);
