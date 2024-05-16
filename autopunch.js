@@ -4,9 +4,22 @@ import tough from 'tough-cookie';
 import { wrapper } from 'axios-cookiejar-support';
 import crc32 from 'crc-32';
 import moment from 'moment';
+// holidays from https://api.boostr.cl/feriados/en.json
+import holidays from './chile_holidays_2024.json' assert { type: 'json' };
 
 const WORKERA_USER = ""
 const WORKERA_PASS = ""
+
+function isHoliday(currentDate) {
+    const year = currentDate.getFullYear();
+    const month = `${currentDate.getMonth()+1}`.padStart(2, '0');
+    const day = currentDate.getDate();
+
+    const dateToCheck = `${year}-${month}-${day}`;
+    if (holidays.data.some(holiday => holiday.date === dateToCheck))
+        return true;
+    return false;
+}
 
 ///----------------------------------------------------------------
 const cookieJar = new tough.CookieJar();
@@ -65,6 +78,7 @@ function calcCheksum(employeeId, dateStr) {
 
 async function sendPunch(employeeId, dataPortal, type) {
     // type can in/out~
+    https_options.headers['Content-Type'] = 'application/json';
     const punchDate = moment(dataPortal['localTime'], 'YYYY/MM/DD HH:mm:ss');
     const checksum = calcCheksum('undefined', punchDate.format('YYYYMMDDHHmmss')); // yes, empoyeeID is undefined... workera bugs!~
     const punchData = {
@@ -77,8 +91,8 @@ async function sendPunch(employeeId, dataPortal, type) {
 }
 
 // -----------
-// Type: 0: entrada
-//       1: salida
+// Type: 0: in
+//       1: out
 async function generatePunch(type) {
     const encryptKey = await getEncryptKey();
     let encryptLoginMessage = encryptAES(
@@ -123,4 +137,14 @@ async function generatePunch(type) {
     console.log("Punch completed successfull", punch.data);
 }
 
-generatePunch(0);
+// crontab: 0 9,18 * * 1-5; sleep random? node .\autopunch.js
+const currentDate = new Date();
+if (!isHoliday(currentDate)) {
+    if (currentDate.getHours() < 12) {
+        console.log("Creating in punch");
+        generatePunch(0);
+    } else {
+        console.log("Creating out punch");
+        generatePunch(1);
+    }
+}
