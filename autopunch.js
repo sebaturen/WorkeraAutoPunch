@@ -6,9 +6,7 @@ import crc32 from 'crc-32';
 import moment from 'moment';
 // holidays from https://api.boostr.cl/feriados/en.json
 import holidays from './chile_holidays_2024.json' assert { type: 'json' };
-
-const WORKERA_USER = ""
-const WORKERA_PASS = ""
+import config from './local_config.json' assert { type: 'json' };
 
 function isHoliday(currentDate) {
     const year = currentDate.getFullYear();
@@ -90,32 +88,41 @@ async function sendPunch(employeeId, dataPortal, type) {
     return punchGenerateRequest
 }
 
+async function notifyDiscord(msg) {
+    if (config['discord_webhook'].length > 0) {
+        const message = {
+            content: `[AutoPunch] ${msg}`
+        };
+        await axios.post(config['discord_webhook'], message);
+    }
+}
+
 // -----------
 // Type: 0: in
 //       1: out
 async function generatePunch(type) {
     const encryptKey = await getEncryptKey();
     let encryptLoginMessage = encryptAES(
-        `{"username":"${WORKERA_USER}","password":"${WORKERA_PASS}"}`, 
+        `{"username":"${config['workera']['user']}","password":"${config['workera']['pass']}"}`, 
         encryptKey
     );
     encryptLoginMessage = `${encryptKey}${encryptLoginMessage}`;
     const loginPost = await loginUser(encryptLoginMessage);
     if (loginPost.status != 200) {
-        console.error("Can't login! check the details...?", loginPost);
+        await notifyDiscord("Can't login! check the details...?");
         return;
     }
     console.log("Login success");
     // Valid login success and cookie is saved....
     const employerData = await getEmployerInfo();
     if (!Array.isArray(employerData)) {
-        console.error("Can't get the employer information... some error ocurre... cookies?");
+        await notifyDiscord("Can't get the employer information... some error ocurre... cookies?");
         return;
     }
     console.log("Employer data success", employerData[0]['nickname']);
     const employeeData = await getEmployeeInfo(employerData[0]["nickname"]);
     if (!("company" in employeeData) || !("employeeId" in employeeData['company'])) {
-        console.error("The employee information not found...");
+        await notifyDiscord("The employee information not found...");
         return;
     }
     const employeeUserId = employeeData['userEmployeeId'];
@@ -123,7 +130,7 @@ async function generatePunch(type) {
     console.log("Employee data info success", employeeId);
     const employeeCanSignerValidate = await getEmployeeUserCanSigner();
     if (employeeCanSignerValidate.status != 200) {
-        console.error("User can't signer... ???", employeeCanSignerValidate);
+        await notifyDiscord("User can't signer... ???");
         return;
     }
     console.log("Employee can signer DONE");
@@ -131,20 +138,20 @@ async function generatePunch(type) {
     const dataPortal = await getDataPortal(employeeUserId);
     const punch = await sendPunch(employeeId, dataPortal, type);
     if (punch.status != 200) {
-        console.error("Punch can't completed...", punch);
+        await notifyDiscord("Punch can't completed...");
         return;
     }
-    console.log("Punch completed successfull", punch.data);
+    await notifyDiscord("Punch completed successfull");
 }
 
 // crontab: 0 9,18 * * 1-5; sleep random? node .\autopunch.js
 const currentDate = new Date();
 if (!isHoliday(currentDate)) {
     if (currentDate.getHours() < 12) {
-        console.log("Creating in punch");
+        await notifyDiscord("Creating in punch");
         generatePunch(0);
     } else {
-        console.log("Creating out punch");
+        await notifyDiscord("Creating out punch");
         generatePunch(1);
     }
 }
